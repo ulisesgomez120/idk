@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isValidUserData(data) {
+      return data.keys().hasAll(['email', 'createdAt', 'updatedAt']) &&
+             data.email is string &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp;
+    }
+    
+    function isValidSettings(data) {
+      return data.searchRadius is number &&
+             data.searchRadius >= 1 &&
+             data.searchRadius <= 25 &&
+             data.priceRange is list &&
+             data.excludedCuisines is list &&
+             data.locationEnabled is bool;
+    }
+    
+    // User profiles - users can only read and write their own data
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserData(request.resource.data);
+      allow update: if isOwner(userId) && 
+                      request.resource.data.diff(resource.data).affectedKeys()
+                      .hasAny(['settings', 'recentRestaurants', 'updatedAt']);
+      
+      // Additional validation for settings updates
+      allow update: if isOwner(userId) && 
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['settings', 'updatedAt']) &&
+                      isValidSettings(request.resource.data.settings);
+    }
+    
+    // Feedback collection - users can create their own feedback, admins can read all
+    match /feedback/{feedbackId} {
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow read: if isOwner(request.resource.data.userId) || request.auth.token.admin == true;
+    }
+    
+    // Analytics - users can create their own analytics, admins can read all
+    match /analytics/searches/{searchId} {
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow read: if request.auth.token.admin == true;
+    }
+    
+    match /analytics/selections/{selectionId} {
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow read: if request.auth.token.admin == true;
+    }
+  }
+}
